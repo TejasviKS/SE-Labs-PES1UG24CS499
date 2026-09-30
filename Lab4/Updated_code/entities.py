@@ -1,0 +1,105 @@
+import pygame
+from game.maze import CELL, bfs
+
+SPEED = 3        # straight movement (pixels per frame)
+DIAG_SPEED = 2   # per axis when moving diagonally (2 * 1.41 ≈ 2.83, close to 3)
+FREEZE_FRAMES = 300   # 5 seconds at 60 FPS
+
+class Player:
+    def __init__(self, r, c):
+        cx, cy = c*CELL+CELL//2, r*CELL+CELL//2
+        self.rect = pygame.Rect(cx-10, cy-10, 20, 20)
+        self.color = (60, 120, 220)
+
+    def move(self, keys, walls, rows, cols):
+        left  = keys[pygame.K_LEFT]  or keys[pygame.K_a]
+        right = keys[pygame.K_RIGHT] or keys[pygame.K_d]
+        up    = keys[pygame.K_UP]    or keys[pygame.K_w]
+        down  = keys[pygame.K_DOWN]  or keys[pygame.K_s]
+
+        # Opposite keys cancel out (-1, 0 or 1)
+        dx = int(right) - int(left)
+        dy = int(down) - int(up)
+
+        # Use a smaller step on each axis when moving diagonally
+        speed = DIAG_SPEED if (dx and dy) else SPEED
+        dx *= speed
+        dy *= speed
+
+        nr = self.rect.move(dx, 0)
+        if self._valid(nr, walls, rows, cols): self.rect = nr
+        nr = self.rect.move(0, dy)
+        if self._valid(nr, walls, rows, cols): self.rect = nr
+
+    def _valid(self, rect, walls, rows, cols):
+        # Stay inside the maze bounds
+        if rect.left < 0 or rect.top < 0 or rect.right > cols*CELL or rect.bottom > rows*CELL:
+            return False
+
+        # Only check cells near the player (rect can touch neighbouring cells' walls)
+        r0 = max(0, rect.top // CELL - 1)
+        r1 = min(rows - 1, rect.bottom // CELL + 1)
+        c0 = max(0, rect.left // CELL - 1)
+        c1 = min(cols - 1, rect.right // CELL + 1)
+
+        T = 2  # half wall thickness (walls are drawn 3px wide)
+        for r in range(r0, r1 + 1):
+            for c in range(c0, c1 + 1):
+                x, y = c*CELL, r*CELL
+                w = walls[r][c]  # [top, bottom, right, left]
+                if w[0] and rect.colliderect(pygame.Rect(x-T, y-T, CELL+2*T, 2*T)): return False
+                if w[1] and rect.colliderect(pygame.Rect(x-T, y+CELL-T, CELL+2*T, 2*T)): return False
+                if w[2] and rect.colliderect(pygame.Rect(x+CELL-T, y-T, 2*T, CELL+2*T)): return False
+                if w[3] and rect.colliderect(pygame.Rect(x-T, y-T, 2*T, CELL+2*T)): return False
+        return True
+
+    def draw(self, screen):
+        pygame.draw.ellipse(screen, self.color, self.rect)
+
+class Enemy:
+    def __init__(self, r, c):
+        self.r, self.c = r, c
+        cx, cy = c*CELL+CELL//2, r*CELL+CELL//2
+        self.rect = pygame.Rect(cx-12, cy-12, 24, 24)
+        self.color = (220, 60, 60)
+        self.frozen_color = (120, 190, 255)
+        self.timer = 0
+        self.move_interval = 20  # frames between cell moves
+        self.frozen = False
+        self.freeze_timer = 0
+
+    def freeze(self, frames=FREEZE_FRAMES):
+        self.frozen = True
+        self.freeze_timer = frames
+
+    def update(self, walls, player, rows, cols):
+        # While frozen: count down and do nothing else
+        if self.frozen:
+            self.freeze_timer -= 1
+            if self.freeze_timer <= 0:
+                self.frozen = False
+            return
+
+        self.timer += 1
+        if self.timer >= self.move_interval:
+            self.timer = 0
+            pr, pc = player.rect.centery//CELL, player.rect.centerx//CELL
+            step = bfs(walls, (self.r, self.c), (pr, pc), rows, cols)
+            if step:
+                dr, dc = step
+                self.r += dr; self.c += dc
+                cx, cy = self.c*CELL+CELL//2, self.r*CELL+CELL//2
+                self.rect.center = (cx, cy)
+
+    def draw(self, screen):
+        color = self.frozen_color if self.frozen else self.color
+        pygame.draw.rect(screen, color, self.rect, border_radius=5)
+        if self.frozen:
+            # white outline + bar showing remaining freeze time
+            pygame.draw.rect(screen, (255, 255, 255), self.rect, width=2, border_radius=5)
+            bar_w = int(self.rect.width * self.freeze_timer / FREEZE_FRAMES)
+            pygame.draw.rect(screen, (255, 255, 255), (self.rect.x, self.rect.y - 7, bar_w, 4))
+        # eyes
+        for ex in [self.rect.x+4, self.rect.x+14]:
+            pygame.draw.circle(screen, (255,255,255), (ex, self.rect.y+8), 4)
+            pygame.draw.circle(screen, (0,0,0), (ex+1, self.rect.y+8), 2)
